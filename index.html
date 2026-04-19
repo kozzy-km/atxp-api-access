@@ -4,20 +4,20 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>ATXP Manager</title>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
-  :root{--bg:#0b0d12;--card:#151823;--muted:#8892a6;--fg:#eaeef7;--accent:#7c5cff;--danger:#ff5d6c;--ok:#2ecc71}
+  :root{--bg:#0b0d12;--card:#151823;--muted:#8892a6;--fg:#eaeef7;--accent:#7c5cff;--danger:#ff5d6c}
   *{box-sizing:border-box;font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   body{margin:0;background:var(--bg);color:var(--fg);min-height:100vh}
   header{padding:22px 28px;border-bottom:1px solid #222838;display:flex;justify-content:space-between;align-items:center}
-  h1{margin:0;font-size:20px;letter-spacing:.3px}
+  h1{margin:0;font-size:20px}
   main{max-width:1100px;margin:0 auto;padding:24px}
   .card{background:var(--card);border:1px solid #222838;border-radius:14px;padding:18px;margin-bottom:18px}
   .row{display:flex;gap:12px;flex-wrap:wrap}
-  input,button,select,textarea{background:#0f1220;color:var(--fg);border:1px solid #2a3048;border-radius:10px;padding:10px 12px;font-size:14px}
+  input,button{background:#0f1220;color:var(--fg);border:1px solid #2a3048;border-radius:10px;padding:10px 12px;font-size:14px}
   input{min-width:260px}
   button{cursor:pointer;background:var(--accent);border-color:transparent;font-weight:600}
-  button.secondary{background:#222838}
-  button.danger{background:var(--danger)}
+  button.secondary{background:#222838} button.danger{background:var(--danger)}
   table{width:100%;border-collapse:collapse;margin-top:10px}
   th,td{text-align:left;padding:10px;border-bottom:1px solid #222838;font-size:14px}
   th{color:var(--muted);font-weight:600}
@@ -26,9 +26,7 @@
   .stat{flex:1;min-width:180px;background:#0f1220;border:1px solid #222838;border-radius:12px;padding:14px}
   .stat h3{margin:0;color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.08em}
   .stat p{margin:6px 0 0;font-size:24px;font-weight:700}
-  .muted{color:var(--muted)}
-  .hidden{display:none}
-  .token-warn{color:var(--danger);font-size:12px}
+  .muted{color:var(--muted)} .hidden{display:none}
   code{background:#0f1220;padding:2px 6px;border-radius:6px}
   footer{padding:18px 28px;color:var(--muted);font-size:12px;text-align:center}
   a{color:var(--accent)}
@@ -37,24 +35,23 @@
 <body>
 <header>
   <h1>ATXP Manager</h1>
-  <div>
-    <span id="who" class="pill">locked</span>
-    <button id="logoutBtn" class="secondary" style="margin-left:8px">Lock</button>
-  </div>
+  <div id="who" class="pill">signed out</div>
 </header>
 
 <main>
+  <!-- CONFIG / LOGIN -->
   <section id="loginView" class="card">
-    <h2 style="margin-top:0">Sign in</h2>
-    <p class="muted">Enter your admin token and your Cloudflare Worker URL. Both are stored only in your browser (localStorage).</p>
+    <h2 style="margin-top:0">Configure</h2>
+    <p class="muted">Enter your Cloudflare Worker URL and the Google OAuth client id you configured in Cloudflare. Both are stored only in your browser.</p>
     <div class="row">
-      <input id="workerUrl" placeholder="https://atxp-api.<your-subdomain>.workers.dev" style="flex:1;min-width:360px"/>
-      <input id="adminToken" type="password" placeholder="Admin token" />
-      <button id="loginBtn">Unlock</button>
+      <input id="workerUrl" placeholder="https://atxp-api.<you>.workers.dev" style="flex:1;min-width:360px"/>
+      <input id="googleClientId" placeholder="GOOGLE_CLIENT_ID.apps.googleusercontent.com" style="flex:1;min-width:360px"/>
     </div>
-    <p id="loginErr" class="token-warn"></p>
+    <div style="margin-top:14px" id="gsiBox"></div>
+    <p id="loginErr" style="color:var(--danger);font-size:12px"></p>
   </section>
 
+  <!-- APP -->
   <section id="app" class="hidden">
     <div class="card">
       <div class="totals">
@@ -68,12 +65,11 @@
     <div class="card">
       <h2 style="margin-top:0">Add an ATXP account</h2>
       <div class="row">
-        <input id="label" placeholder="Label (e.g. main-1)" />
+        <input id="label" placeholder="Label (e.g. main-1)"/>
         <input id="connectionStr" placeholder="ATXP connection URL (https://accounts.atxp.ai?connection_token=...&account_id=...)" style="flex:1"/>
-        <input id="balance" type="number" step="0.01" placeholder="Initial balance ($)" value="3" style="min-width:140px"/>
+        <input id="balance" type="number" step="0.01" value="3" style="min-width:140px"/>
         <button id="addBtn">Add</button>
       </div>
-      <p class="muted" style="margin-top:10px">Tip: the <code>api_key</code> passed to OpenAI SDKs will be rotated automatically by the worker. A 402 from ATXP marks that key as depleted and deletes it.</p>
     </div>
 
     <div class="card">
@@ -81,25 +77,25 @@
         <h2 style="margin:0">Stored accounts</h2>
         <div>
           <button id="refreshBtn" class="secondary">Refresh</button>
-          <button id="probeBtn" class="secondary" title="Ping each key to detect dead ones">Probe balances</button>
+          <button id="probeBtn" class="secondary">Probe balances</button>
+          <button id="logoutBtn" class="secondary">Sign out</button>
         </div>
       </div>
       <table>
-        <thead>
-          <tr><th>Label</th><th>Account ID</th><th>Balance</th><th>Last used</th><th>Status</th><th></th></tr>
-        </thead>
+        <thead><tr><th>Label</th><th>Account ID</th><th>Balance</th><th>Last used</th><th>Status</th><th></th></tr></thead>
         <tbody id="rows"></tbody>
       </table>
-      <p id="emptyState" class="muted hidden">No accounts yet. Add one above.</p>
+      <p id="emptyState" class="muted hidden">No accounts yet.</p>
     </div>
 
     <div class="card">
-      <h2 style="margin-top:0">How to use it in your script</h2>
+      <h2 style="margin-top:0">Use it from your Python script</h2>
       <pre style="background:#0f1220;padding:14px;border-radius:10px;overflow:auto"><code>from openai import OpenAI
 client = OpenAI(
-    api_key="<YOUR_ADMIN_TOKEN>",
-    base_url="<span id=\"inlineUrl\">https://your-worker.workers.dev</span>/v1",
+    api_key="&lt;GOOGLE_ID_TOKEN&gt;",   # ID token for your allow-listed Google account
+    base_url="<span id="inlineUrl">https://your-worker.workers.dev</span>/v1",
 )</code></pre>
+      <p class="muted">For scripts, fetch an ID token with the gcloud CLI or a service account flow. The worker rejects any other email.</p>
     </div>
   </section>
 </main>
@@ -108,81 +104,109 @@ client = OpenAI(
 
 <script>
 const $ = id => document.getElementById(id);
-let STATE = { url: '', token: '' };
-function save(){ localStorage.setItem('atxp-mgr', JSON.stringify(STATE)); }
-function load(){ try{ STATE = JSON.parse(localStorage.getItem('atxp-mgr')) || STATE; }catch(e){} }
+let CFG = { url: "", clientId: "", idToken: "" };
+
+function save(){ localStorage.setItem("atxp-mgr", JSON.stringify({url:CFG.url, clientId:CFG.clientId})); }
+function load(){
+  try {
+    const s = JSON.parse(localStorage.getItem("atxp-mgr")) || {};
+    CFG.url = s.url || ""; CFG.clientId = s.clientId || "";
+  } catch {}
+}
+
 async function api(path, opts={}){
-  const r = await fetch(STATE.url.replace(/\/$/,'') + path, {
+  const r = await fetch(CFG.url.replace(/\/$/,"") + path, {
     ...opts,
-    headers: { 'Content-Type':'application/json', 'X-Admin-Token': STATE.token, ...(opts.headers||{}) }
+    headers: { "Content-Type":"application/json", "Authorization": "Bearer " + CFG.idToken, ...(opts.headers||{}) },
   });
-  if(!r.ok){ const t = await r.text(); throw new Error(r.status + ' ' + t); }
+  if (!r.ok) { const t = await r.text(); throw new Error(r.status + " " + t); }
   return r.json();
 }
-async function unlock(){
-  STATE.url = $('workerUrl').value.trim();
-  STATE.token = $('adminToken').value.trim();
-  if(!STATE.url || !STATE.token){ $('loginErr').textContent='Both fields are required.'; return; }
-  try{
-    await api('/admin/keys');
-    save();
-    $('loginView').classList.add('hidden');
-    $('app').classList.remove('hidden');
-    $('who').textContent = 'unlocked';
-    $('who').style.background = '#1b3a2a'; $('who').style.color = '#9ef5b5';
-    $('endpointStat').textContent = STATE.url + '/v1';
-    if($('inlineUrl')) $('inlineUrl').textContent = STATE.url;
+
+function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+
+async function onCredential(resp){
+  CFG.idToken = resp.credential;
+  CFG.url = $("workerUrl").value.trim();
+  CFG.clientId = $("googleClientId").value.trim();
+  save();
+  try {
+    await api("/admin/keys");
+    $("loginView").classList.add("hidden");
+    $("app").classList.remove("hidden");
+    $("who").textContent = "signed in";
+    $("endpointStat").textContent = CFG.url + "/v1";
+    $("inlineUrl").textContent = CFG.url;
     refresh();
-  }catch(e){ $('loginErr').textContent = 'Login failed: ' + e.message; }
+  } catch (e) {
+    $("loginErr").textContent = "Sign-in failed: " + e.message;
+  }
 }
-function lock(){ STATE={url:'',token:''}; save(); location.reload(); }
+
+function renderGoogleBtn(){
+  if (!window.google || !CFG.clientId) return;
+  google.accounts.id.initialize({ client_id: CFG.clientId, callback: onCredential });
+  google.accounts.id.renderButton($("gsiBox"), { theme: "filled_black", size: "large", text: "signin_with" });
+}
+
 async function refresh(){
-  const data = await api('/admin/keys');
-  const tbody = $('rows'); tbody.innerHTML='';
+  const data = await api("/admin/keys");
+  const tbody = $("rows"); tbody.innerHTML = "";
   let total = 0;
   (data.keys||[]).forEach(k => {
     total += Number(k.balance||0);
-    const tr = document.createElement('tr');
-    tr.innerHTML = '<td>'+escapeHtml(k.label||'')+'</td>'+
-      '<td><code>'+escapeHtml(k.account_id||'')+'</code></td>'+
-      '<td>$'+Number(k.balance||0).toFixed(2)+'</td>'+
-      '<td class="muted">'+(k.last_used? new Date(k.last_used).toLocaleString():'never')+'</td>'+
-      '<td>'+(k.status==='ok' ? '<span class="pill" style="background:#1b3a2a;color:#9ef5b5">ok</span>' : '<span class="pill" style="background:#3a1b1b;color:#ff9aa2">'+escapeHtml(k.status||'')+'</span>')+'</td>'+
-      '<td><button class="secondary" data-edit="'+k.id+'">Edit</button> <button class="danger" data-del="'+k.id+'">Delete</button></td>';
+    const tr = document.createElement("tr");
+    tr.innerHTML =
+      "<td>"+escapeHtml(k.label||"")+"</td>"+
+      "<td><code>"+escapeHtml(k.account_id||"")+"</code></td>"+
+      "<td>$"+Number(k.balance||0).toFixed(2)+"</td>"+
+      "<td class=\"muted\">"+(k.last_used?new Date(k.last_used).toLocaleString():"never")+"</td>"+
+      "<td>"+(k.status==="ok"
+        ? "<span class=\"pill\" style=\"background:#1b3a2a;color:#9ef5b5\">ok</span>"
+        : "<span class=\"pill\" style=\"background:#3a1b1b;color:#ff9aa2\">"+escapeHtml(k.status||"")+"</span>")+"</td>"+
+      "<td><button class=\"secondary\" data-edit=\""+k.id+"\">Edit</button> <button class=\"danger\" data-del=\""+k.id+"\">Delete</button></td>";
     tbody.appendChild(tr);
   });
-  $('countStat').textContent = (data.keys||[]).length;
-  $('totalStat').textContent = '$'+total.toFixed(2);
-  $('emptyState').classList.toggle('hidden', (data.keys||[]).length>0);
+  $("countStat").textContent = (data.keys||[]).length;
+  $("totalStat").textContent = "$"+total.toFixed(2);
+  $("emptyState").classList.toggle("hidden", (data.keys||[]).length>0);
 }
-function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+
 async function addKey(){
-  const label = $('label').value.trim();
-  const connection = $('connectionStr').value.trim();
-  const balance = parseFloat($('balance').value||'3');
-  if(!connection){ alert('Connection string required'); return; }
-  await api('/admin/keys', {method:'POST', body: JSON.stringify({label, connection, balance})});
-  $('label').value=''; $('connectionStr').value=''; $('balance').value='3';
+  const label = $("label").value.trim();
+  const connection = $("connectionStr").value.trim();
+  const balance = parseFloat($("balance").value || "3");
+  if (!connection) { alert("Connection URL required"); return; }
+  await api("/admin/keys", { method:"POST", body: JSON.stringify({ label, connection, balance }) });
+  $("label").value=""; $("connectionStr").value=""; $("balance").value="3";
   refresh();
 }
-document.addEventListener('click', async (e)=>{
-  const del = e.target.getAttribute('data-del');
-  const edit = e.target.getAttribute('data-edit');
-  if(del){ if(confirm('Delete this key?')){ await api('/admin/keys/'+del,{method:'DELETE'}); refresh(); } }
-  if(edit){
-    const nb = prompt('New balance in $:'); if(nb===null) return;
-    const nl = prompt('New label (leave blank to keep):');
-    await api('/admin/keys/'+edit,{method:'PATCH', body: JSON.stringify({balance: parseFloat(nb), label: nl||undefined})});
+
+document.addEventListener("click", async (e) => {
+  const del = e.target.getAttribute("data-del");
+  const edit = e.target.getAttribute("data-edit");
+  if (del && confirm("Delete this key?")) { await api("/admin/keys/"+del, { method:"DELETE" }); refresh(); }
+  if (edit) {
+    const nb = prompt("New balance in $:"); if (nb === null) return;
+    const nl = prompt("New label (blank to keep):");
+    await api("/admin/keys/"+edit, { method:"PATCH", body: JSON.stringify({ balance: parseFloat(nb), label: nl || undefined }) });
     refresh();
   }
 });
-$('loginBtn').onclick = unlock;
-$('logoutBtn').onclick = lock;
-$('addBtn').onclick = addKey;
-$('refreshBtn').onclick = refresh;
-$('probeBtn').onclick = async ()=>{ await api('/admin/probe',{method:'POST'}); refresh(); };
+
+$("addBtn").onclick = addKey;
+$("refreshBtn").onclick = refresh;
+$("probeBtn").onclick = async () => { await api("/admin/probe", { method:"POST" }); refresh(); };
+$("logoutBtn").onclick = () => { localStorage.removeItem("atxp-mgr"); location.reload(); };
+
+["workerUrl","googleClientId"].forEach(id =>
+  $(id).addEventListener("change", () => { CFG.url = $("workerUrl").value.trim(); CFG.clientId = $("googleClientId").value.trim(); save(); renderGoogleBtn(); }));
+
 load();
-if(STATE.url && STATE.token){ $('workerUrl').value = STATE.url; $('adminToken').value = STATE.token; unlock(); }
+$("workerUrl").value = CFG.url;
+$("googleClientId").value = CFG.clientId;
+
+const gsiReady = setInterval(() => { if (window.google) { clearInterval(gsiReady); renderGoogleBtn(); } }, 200);
 </script>
 </body>
 </html>
