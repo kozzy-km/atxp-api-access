@@ -1,86 +1,107 @@
 # ATXP Manager
 
-A private dashboard + Cloudflare Worker that stores a pool of ATXP connection URLs
-and exposes a single OpenAI-compatible endpoint (`/v1/*`) that **auto-rotates** the next
-key when the current one returns `402` (out of balance) or `401` (invalid).
-Dead keys are deleted from KV automatically.
+A small private dashboard + Cloudflare Worker that stores a pool of ATXP connection URLs in **Cloudflare D1** and exposes a single OpenAI-compatible endpoint (`/v1/*`) that **auto-rotates** to the next key as soon as the current one returns `402` / `401`. The dead key is deleted from D1 automatically.
+
+Access is gated by **Google Sign-In**: only the email you whitelist on the Worker (`ALLOWED_EMAIL`) can log in or use the proxy.
 
 ## Architecture
 
 ```
- Your script  -->  https://atxp-api.<you>.workers.dev/v1/chat/completions
-                         |  (Authorization: Bearer <ADMIN_TOKEN>)
-                         v
-                  Cloudflare Worker --KV--> pool of ATXP connection URLs
-                         |
-                         v
-                  https://llm.atxp.ai/v1/*
+  Browser (GitHub Pages UI)
+      |  google.accounts.id -> ID token (JWT)
+      v
+  Cloudflare Worker  -- verifies JWT (signature + aud + email) --
+      |
+      +--> /admin/*   CRUD against D1 table `keys`
+      |
+      +--> /v1/*      rotates keys from D1, calls llm.atxp.ai,
+                      deletes the row on 402/401 and retries.
 ```
 
-The dashboard (`index.html`, GitHub Pages) talks to the Worker over `/admin/*`
-with the `X-Admin-Token` header. Only someone who knows `ADMIN_TOKEN` can
-list/add/edit/delete keys or use the proxy.
+## 1. Google Cloud - OAuth client id
 
-## One-time setup
+1. https://console.cloud.google.com/ -> APIs & Services -> **Credentials**.
+2. **Create credentials -> OAuth client ID** -> Application type: **Web application**.
+3. Authorized JavaScript origins:
+   - `https://kozzy-km.github.io`
+4. Copy the **Client ID** (looks like `...apps.googleusercontent.com`).
+5. Note the Google email you want to allow in.
 
-### 1. Cloudflare Worker
+## 2. Cloudflare - Worker + D1
 
 ```bash
-npm i -g wrangler
 git clone https://github.com/kozzy-km/atxp-api-access
 cd atxp-api-access/worker
+npm i -g wrangler
+npx wrangler login
 
-npx wrangler kv namespace create ATXP_KV
-# paste the returned id into wrangler.toml
+# Create the D1 database and copy the returned database_id into wrangler.toml
+npx wrangler d1 create atxp_manager
 
-npx wrangler secret put ADMIN_TOKEN
-# paste a long random token
+# Create the table in the remote DB
+npx wrangler d1 execute atxp_manager --file=schema.sql --remote
 
+# Put your Google client id into wrangler.toml (under [vars]).
+# Put your allow-listed Google email as a Worker secret:
+npx wrangler secret put ALLOWED_EMAIL
+# (paste: your-email@gmail.com)
+
+# Deploy
 npx wrangler deploy
 ```
 
-You get a URL like `https://atxp-api.<your-subdomain>.workers.dev`.
+You get a URL like `https://atxp-api.<you>.workers.dev`.
 
-### 2. GitHub Pages
+## 3. GitHub Pages - the UI
 
-In repo Settings -> Pages -> Source = `main` / root.
-Your URL will be `https://kozzy-km.github.io/atxp-api-access/`.
-Open it, paste Worker URL + `ADMIN_TOKEN`, you're in.
+Pages is already enabled from `main` / root. Open:
+**https://kozzy-km.github.io/atxp-api-access/**
 
-## Using the proxy from Python
+- Paste the Worker URL + the Google Client ID.
+- Click **Sign in with Google**. Only the whitelisted email gets past the Worker.
+
+## 4. Using the proxy from Python
+
+The Worker verifies a Google **ID token** in `Authorization: Bearer`.
+
+For interactive use, open the dashboard once and copy the token from DevTools.
+For scripts, generate a fresh ID token with `gcloud auth print-identity-token` or a service-account/OIDC flow and feed it as `api_key`:
 
 ```python
 from openai import OpenAI
 client = OpenAI(
-    api_key="<ADMIN_TOKEN>",
+    api_key=GOOGLE_ID_TOKEN,                       # fresh per run
     base_url="https://atxp-api.<you>.workers.dev/v1",
 )
 ```
 
-If a key returns 402/401 the Worker deletes it from KV and retries with the
-next one - transparent to your script.
+## How key rotation works (backend, Cloudflare side)
 
-## Balance / total value
+On every request to `/v1/*`:
 
-ATXP does not expose a public per-account balance HTTP endpoint
-(`npx atxp balance` uses a signed CLI session), so the Worker:
+1. **Auth check** - the Worker verifies the ID token (signature against Google's JWKS, `aud == GOOGLE_CLIENT_ID`, `exp > now`, `email == ALLOWED_EMAIL`).
+2. **Pool load** - `SELECT ... FROM keys WHERE status!='dead' ORDER BY last_used ASC`. Least-recently-used key first.
+3. **Attempt** - forward the request to `https://llm.atxp.ai<path>` with `Authorization: Bearer <connection_url>` taken from the row.
+4. **If upstream returns 401 or 402** -> `DELETE FROM keys WHERE id=?` and **continue** to step 3 with the next row. Your client never sees the 402.
+5. **Otherwise** return the upstream response verbatim. Set `last_used = now()` and decrement a small balance estimate.
+6. If every row in the pool has been tried and all failed, return `402 {"error":"all keys exhausted"}` so the caller knows the pool is empty.
 
-* defaults each new account to $3.00 (common free credit),
-* decrements a small amount per successful call,
-* lets you edit balances manually in the UI,
-* has a Probe button that pings `/v1/models` per key and deletes dead ones.
+Constant switching: because the pool is ordered by `last_used` ASC, sequential calls naturally round-robin across healthy keys, and the instant one goes bad it's removed from D1 and skipped in future requests.
 
-The dashboard totals the stored balances to show the pool estimated value.
+## Balances
 
-## Security
+ATXP has no public per-account balance HTTP endpoint today (`npx atxp balance` uses a signed CLI session), so we approximate:
 
-* Every `/admin/*` route requires `X-Admin-Token`.
-* Every `/v1/*` proxy call requires `Authorization: Bearer <ADMIN_TOKEN>`.
-* Connection URLs never leave the Worker - only masked views reach the UI.
-* The admin token lives only in Cloudflare secrets + your browser localStorage.
+- new key defaults to `$3.00` (common free credit),
+- each successful call decrements `$0.01`,
+- you can edit balances in the UI any time,
+- the **Probe** button hits `/v1/models` with each stored key and drops the ones that return 401/402.
+
+If ATXP publishes a balance endpoint, only `probeKey()` in `worker/worker.js` needs updating.
 
 ## Files
 
-* `index.html` - static dashboard (GitHub Pages)
-* `worker/worker.js` - Cloudflare Worker source
-* `worker/wrangler.toml` - deploy config
+- `index.html`          - GitHub Pages dashboard (Google Sign-In + CRUD UI)
+- `worker/worker.js`    - Cloudflare Worker (JWT verify + D1 + rotation proxy)
+- `worker/wrangler.toml`- Worker config (D1 binding, Google client id)
+- `worker/schema.sql`   - D1 table definition
