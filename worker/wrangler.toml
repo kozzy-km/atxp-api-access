@@ -2,9 +2,19 @@ name = "atxp-api"
 main = "worker.js"
 compatibility_date = "2024-11-01"
 
-# Bind a KV namespace for stored keys. Create it with:
-#   npx wrangler kv namespace create ATXP_KV
-# then paste the returned id here.
-kv_namespaces = [
-  { binding = "ATXP_KV", id = "REPLACE_WITH_KV_ID" }
-]
+# --- D1 database ---
+# Create with:  npx wrangler d1 create atxp_manager
+# Paste the returned database_id here:
+[[d1_databases]]
+binding = "DB"
+database_name = "atxp_manager"
+database_id = "REPLACE_WITH_D1_ID"
+
+# --- Public (non-secret) variables ---
+# GOOGLE_CLIENT_ID is technically not secret (it ships to the browser anyway),
+# but we also bind it here so the Worker can verify tokens.
+[vars]
+GOOGLE_CLIENT_ID = "REPLACE_WITH_GOOGLE_CLIENT_ID.apps.googleusercontent.com"
+
+# --- Secrets (set with `wrangler secret put`) ---
+#   ALLOWED_EMAIL   -> the only Google email allowed to access the app
