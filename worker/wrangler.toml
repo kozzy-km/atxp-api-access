@@ -1,20 +1,8 @@
-name = "atxp-api"
+name = "atxp-proxy"
 main = "worker.js"
-compatibility_date = "2024-11-01"
+compatibility_date = "2025-01-01"
 
-# --- D1 database ---
-# Create with:  npx wrangler d1 create atxp_manager
-# Paste the returned database_id here:
 [[d1_databases]]
 binding = "DB"
-database_name = "atxp_manager"
-database_id = "REPLACE_WITH_D1_ID"
-
-# --- Public (non-secret) variables ---
-# GOOGLE_CLIENT_ID is technically not secret (it ships to the browser anyway),
-# but we also bind it here so the Worker can verify tokens.
-[vars]
-GOOGLE_CLIENT_ID = "REPLACE_WITH_GOOGLE_CLIENT_ID.apps.googleusercontent.com"
-
-# --- Secrets (set with `wrangler secret put`) ---
-#   ALLOWED_EMAIL   -> the only Google email allowed to access the app
+database_name = "atxp-db"
+database_id = "PASTE_YOUR_D1_ID_HERE"

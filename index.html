@@ -1,212 +1,227 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>ATXP Manager</title>
-<script src="https://accounts.google.com/gsi/client" async defer></script>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+<title>ATXP Key Manager</title>
 <style>
-  :root{--bg:#0b0d12;--card:#151823;--muted:#8892a6;--fg:#eaeef7;--accent:#7c5cff;--danger:#ff5d6c}
-  *{box-sizing:border-box;font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
-  body{margin:0;background:var(--bg);color:var(--fg);min-height:100vh}
-  header{padding:22px 28px;border-bottom:1px solid #222838;display:flex;justify-content:space-between;align-items:center}
-  h1{margin:0;font-size:20px}
-  main{max-width:1100px;margin:0 auto;padding:24px}
-  .card{background:var(--card);border:1px solid #222838;border-radius:14px;padding:18px;margin-bottom:18px}
-  .row{display:flex;gap:12px;flex-wrap:wrap}
-  input,button{background:#0f1220;color:var(--fg);border:1px solid #2a3048;border-radius:10px;padding:10px 12px;font-size:14px}
-  input{min-width:260px}
-  button{cursor:pointer;background:var(--accent);border-color:transparent;font-weight:600}
-  button.secondary{background:#222838} button.danger{background:var(--danger)}
-  table{width:100%;border-collapse:collapse;margin-top:10px}
-  th,td{text-align:left;padding:10px;border-bottom:1px solid #222838;font-size:14px}
-  th{color:var(--muted);font-weight:600}
-  .pill{display:inline-block;padding:4px 10px;border-radius:999px;font-size:12px;background:#222838;color:var(--muted)}
-  .totals{display:flex;gap:16px;flex-wrap:wrap}
-  .stat{flex:1;min-width:180px;background:#0f1220;border:1px solid #222838;border-radius:12px;padding:14px}
-  .stat h3{margin:0;color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.08em}
-  .stat p{margin:6px 0 0;font-size:24px;font-weight:700}
-  .muted{color:var(--muted)} .hidden{display:none}
-  code{background:#0f1220;padding:2px 6px;border-radius:6px}
-  footer{padding:18px 28px;color:var(--muted);font-size:12px;text-align:center}
-  a{color:var(--accent)}
+  :root { --bg:#0b0f14; --card:#141b23; --fg:#e7edf3; --mut:#8a97a6; --acc:#4ea1ff; --bad:#ff5c6c; --ok:#36d399; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font: 15px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  header { padding:18px 16px; border-bottom:1px solid #1f2a36; display:flex; justify-content:space-between; align-items:center; }
+  h1 { font-size:17px; margin:0; }
+  main { padding:16px; max-width:720px; margin:0 auto; }
+  .card { background:var(--card); border:1px solid #1f2a36; border-radius:14px; padding:16px; margin-bottom:14px; }
+  label { display:block; font-size:12px; color:var(--mut); margin-bottom:6px; }
+  input, button, textarea { font:inherit; width:100%; padding:12px 14px; border-radius:10px; border:1px solid #273443; background:#0f151c; color:var(--fg); }
+  button { background:var(--acc); color:#001328; border:0; font-weight:600; margin-top:10px; cursor:pointer; }
+  button.secondary { background:#273443; color:var(--fg); }
+  button.danger { background:var(--bad); color:#1b0307; }
+  .row { display:flex; gap:8px; }
+  .row > * { flex:1; }
+  .key { display:flex; justify-content:space-between; align-items:center; padding:10px 0; border-bottom:1px solid #1f2a36; gap:10px; }
+  .key:last-child { border:0; }
+  .kinfo { min-width:0; }
+  .klabel { font-weight:600; }
+  .kmeta { font-size:12px; color:var(--mut); word-break:break-all; }
+  .pill { font-size:11px; padding:3px 8px; border-radius:999px; display:inline-block; }
+  .pill.on { background:#0e3a2b; color:var(--ok); }
+  .pill.off { background:#3a0e14; color:var(--bad); }
+  .actions { display:flex; gap:6px; }
+  .actions button { padding:8px 10px; margin:0; font-size:12px; width:auto; }
+  .err { color:var(--bad); font-size:13px; margin-top:8px; }
+  .muted { color:var(--mut); font-size:12px; }
+  .tabs { display:flex; gap:6px; margin-bottom:12px; }
+  .tabs button { flex:1; background:#1f2a36; color:var(--fg); padding:10px; font-weight:500; margin:0; }
+  .tabs button.active { background:var(--acc); color:#001328; }
+  .hidden { display:none; }
 </style>
 </head>
 <body>
+
 <header>
-  <h1>ATXP Manager</h1>
-  <div id="who" class="pill">signed out</div>
+  <h1>🔑 ATXP Keys</h1>
+  <button id="logoutBtn" class="secondary hidden" style="width:auto;padding:6px 12px;margin:0;font-size:12px;">Logout</button>
 </header>
 
 <main>
-  <!-- CONFIG / LOGIN -->
-  <section id="loginView" class="card">
-    <h2 style="margin-top:0">Configure</h2>
-    <p class="muted">Enter your Cloudflare Worker URL and the Google OAuth client id you configured in Cloudflare. Both are stored only in your browser.</p>
-    <div class="row">
-      <input id="workerUrl" placeholder="https://atxp-api.<you>.workers.dev" style="flex:1;min-width:360px"/>
-      <input id="googleClientId" placeholder="GOOGLE_CLIENT_ID.apps.googleusercontent.com" style="flex:1;min-width:360px"/>
-    </div>
-    <div style="margin-top:14px" id="gsiBox"></div>
-    <p id="loginErr" style="color:var(--danger);font-size:12px"></p>
-  </section>
 
-  <!-- APP -->
-  <section id="app" class="hidden">
+<section id="loginView" class="card">
+  <label>Worker URL</label>
+  <input id="workerUrl" placeholder="https://atxp-proxy.yourname.workers.dev" autocomplete="url" />
+  <label style="margin-top:10px">Password</label>
+  <input id="password" type="password" placeholder="dashboard password" autocomplete="current-password" />
+  <button id="loginBtn">Sign in</button>
+  <div id="loginErr" class="err"></div>
+  <p class="muted" style="margin-top:10px">Password is the <code>DASHBOARD_PASSWORD</code> secret you set on the Worker.</p>
+</section>
+
+<section id="appView" class="hidden">
+
+  <div class="tabs">
+    <button data-tab="keys" class="active">Keys</button>
+    <button data-tab="test">Test call</button>
+  </div>
+
+  <div id="tab-keys">
     <div class="card">
-      <div class="totals">
-        <div class="stat"><h3>Accounts</h3><p id="countStat">0</p></div>
-        <div class="stat"><h3>Estimated total balance</h3><p id="totalStat">$0.00</p></div>
-        <div class="stat"><h3>Per-account default</h3><p>$3.00</p></div>
-        <div class="stat"><h3>Endpoint</h3><p id="endpointStat" style="font-size:14px;word-break:break-all">-</p></div>
+      <label>Add new ATXP API key</label>
+      <input id="newLabel" placeholder="label (e.g. key-1)" />
+      <input id="newKey" placeholder="atxp_..." style="margin-top:8px" />
+      <button id="addBtn">Add key</button>
+      <div id="addErr" class="err"></div>
+    </div>
+
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <strong>Pool</strong>
+        <button id="refreshBtn" class="secondary" style="width:auto;padding:6px 12px;margin:0;font-size:12px;">Refresh</button>
       </div>
+      <div id="keyList"><p class="muted">loading…</p></div>
     </div>
+  </div>
 
+  <div id="tab-test" class="hidden">
     <div class="card">
-      <h2 style="margin-top:0">Add an ATXP account</h2>
-      <div class="row">
-        <input id="label" placeholder="Label (e.g. main-1)"/>
-        <input id="connectionStr" placeholder="ATXP connection URL (https://accounts.atxp.ai?connection_token=...&account_id=...)" style="flex:1"/>
-        <input id="balance" type="number" step="0.01" value="3" style="min-width:140px"/>
-        <button id="addBtn">Add</button>
-      </div>
+      <label>Test call — path</label>
+      <input id="testPath" value="/v1/models" />
+      <label style="margin-top:8px">Method</label>
+      <input id="testMethod" value="GET" />
+      <label style="margin-top:8px">Body (JSON, optional)</label>
+      <textarea id="testBody" rows="4" placeholder='{"prompt":"hi"}'></textarea>
+      <button id="testBtn">Send</button>
+      <pre id="testOut" class="muted" style="white-space:pre-wrap;margin-top:10px;max-height:300px;overflow:auto;"></pre>
     </div>
+    <p class="muted">The Worker picks an active key, forwards your request to <code>api.atxp.ai</code>, and auto-rotates if that key is dead (401/402).</p>
+  </div>
 
-    <div class="card">
-      <div class="row" style="justify-content:space-between;align-items:center">
-        <h2 style="margin:0">Stored accounts</h2>
-        <div>
-          <button id="refreshBtn" class="secondary">Refresh</button>
-          <button id="probeBtn" class="secondary">Probe balances</button>
-          <button id="logoutBtn" class="secondary">Sign out</button>
-        </div>
-      </div>
-      <table>
-        <thead><tr><th>Label</th><th>Account ID</th><th>Balance</th><th>Last used</th><th>Status</th><th></th></tr></thead>
-        <tbody id="rows"></tbody>
-      </table>
-      <p id="emptyState" class="muted hidden">No accounts yet.</p>
-    </div>
+</section>
 
-    <div class="card">
-      <h2 style="margin-top:0">Use it from your Python script</h2>
-      <pre style="background:#0f1220;padding:14px;border-radius:10px;overflow:auto"><code>from openai import OpenAI
-client = OpenAI(
-    api_key="&lt;GOOGLE_ID_TOKEN&gt;",   # ID token for your allow-listed Google account
-    base_url="<span id="inlineUrl">https://your-worker.workers.dev</span>/v1",
-)</code></pre>
-      <p class="muted">For scripts, fetch an ID token with the gcloud CLI or a service account flow. The worker rejects any other email.</p>
-    </div>
-  </section>
 </main>
-
-<footer>ATXP Manager - <a href="https://github.com/kozzy-km/atxp-api-access">source</a></footer>
 
 <script>
 const $ = id => document.getElementById(id);
-let CFG = { url: "", clientId: "", idToken: "" };
+const LS = { url: "atxp_worker_url", pw: "atxp_pw" };
 
-function save(){ localStorage.setItem("atxp-mgr", JSON.stringify({url:CFG.url, clientId:CFG.clientId})); }
-function load(){
-  try {
-    const s = JSON.parse(localStorage.getItem("atxp-mgr")) || {};
-    CFG.url = s.url || ""; CFG.clientId = s.clientId || "";
-  } catch {}
+function show(view) {
+  $("loginView").classList.toggle("hidden", view !== "login");
+  $("appView").classList.toggle("hidden", view !== "app");
+  $("logoutBtn").classList.toggle("hidden", view !== "app");
 }
 
-async function api(path, opts={}){
-  const r = await fetch(CFG.url.replace(/\/$/,"") + path, {
+function cfg() {
+  return { url: localStorage.getItem(LS.url), pw: localStorage.getItem(LS.pw) };
+}
+
+async function api(path, opts = {}) {
+  const { url, pw } = cfg();
+  const r = await fetch(url.replace(/\/$/, "") + path, {
     ...opts,
-    headers: { "Content-Type":"application/json", "Authorization": "Bearer " + CFG.idToken, ...(opts.headers||{}) },
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer " + pw,
+      ...(opts.headers || {}),
+    },
   });
-  if (!r.ok) { const t = await r.text(); throw new Error(r.status + " " + t); }
-  return r.json();
+  return r;
+}
+
+$("loginBtn").onclick = async () => {
+  const url = $("workerUrl").value.trim();
+  const pw = $("password").value;
+  $("loginErr").textContent = "";
+  if (!url || !pw) { $("loginErr").textContent = "both fields required"; return; }
+  localStorage.setItem(LS.url, url);
+  localStorage.setItem(LS.pw, pw);
+  const r = await api("/admin/keys");
+  if (r.status === 401) { $("loginErr").textContent = "wrong password"; return; }
+  if (!r.ok) { $("loginErr").textContent = "error " + r.status + " - check Worker URL"; return; }
+  show("app");
+  loadKeys();
+};
+
+$("logoutBtn").onclick = () => {
+  localStorage.removeItem(LS.pw);
+  show("login");
+};
+
+document.querySelectorAll(".tabs button").forEach(b => {
+  b.onclick = () => {
+    document.querySelectorAll(".tabs button").forEach(x => x.classList.remove("active"));
+    b.classList.add("active");
+    $("tab-keys").classList.toggle("hidden", b.dataset.tab !== "keys");
+    $("tab-test").classList.toggle("hidden", b.dataset.tab !== "test");
+  };
+});
+
+async function loadKeys() {
+  $("keyList").innerHTML = '<p class="muted">loading…</p>';
+  const r = await api("/admin/keys");
+  if (!r.ok) { $("keyList").innerHTML = '<p class="err">error '+r.status+'</p>'; return; }
+  const keys = await r.json();
+  if (!keys.length) { $("keyList").innerHTML = '<p class="muted">no keys yet — add one above</p>'; return; }
+  $("keyList").innerHTML = keys.map(k => `
+    <div class="key">
+      <div class="kinfo">
+        <div class="klabel">${escapeHtml(k.label||"(no label)")} <span class="pill ${k.active?'on':'off'}">${k.active?'active':'dead'}</span></div>
+        <div class="kmeta">${k.preview} · last used: ${k.last_used?new Date(k.last_used).toLocaleString():'never'}</div>
+      </div>
+      <div class="actions">
+        <button class="secondary" onclick="toggleKey(${k.id}, ${k.active?0:1})">${k.active?'disable':'enable'}</button>
+        <button class="danger" onclick="delKey(${k.id})">delete</button>
+      </div>
+    </div>`).join("");
 }
 
 function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
 
-async function onCredential(resp){
-  CFG.idToken = resp.credential;
-  CFG.url = $("workerUrl").value.trim();
-  CFG.clientId = $("googleClientId").value.trim();
-  save();
+window.toggleKey = async (id, active) => {
+  await api(`/admin/keys/${id}/toggle`, { method: "POST", body: JSON.stringify({ active: !!active }) });
+  loadKeys();
+};
+window.delKey = async id => {
+  if (!confirm("delete this key?")) return;
+  await api(`/admin/keys/${id}`, { method: "DELETE" });
+  loadKeys();
+};
+
+$("addBtn").onclick = async () => {
+  $("addErr").textContent = "";
+  const label = $("newLabel").value.trim();
+  const api_key = $("newKey").value.trim();
+  if (!api_key) { $("addErr").textContent = "api_key required"; return; }
+  const r = await api("/admin/keys", { method: "POST", body: JSON.stringify({ label, api_key }) });
+  if (!r.ok) { $("addErr").textContent = "error " + r.status; return; }
+  $("newLabel").value = ""; $("newKey").value = "";
+  loadKeys();
+};
+
+$("refreshBtn").onclick = loadKeys;
+
+$("testBtn").onclick = async () => {
+  const path = $("testPath").value.trim();
+  const method = $("testMethod").value.trim().toUpperCase();
+  const body = $("testBody").value.trim();
+  $("testOut").textContent = "sending…";
   try {
-    await api("/admin/keys");
-    $("loginView").classList.add("hidden");
-    $("app").classList.remove("hidden");
-    $("who").textContent = "signed in";
-    $("endpointStat").textContent = CFG.url + "/v1";
-    $("inlineUrl").textContent = CFG.url;
-    refresh();
+    const r = await api(path, { method, body: (method==="GET"||!body)?undefined:body });
+    const txt = await r.text();
+    $("testOut").textContent = "HTTP " + r.status + "\n\n" + txt;
   } catch (e) {
-    $("loginErr").textContent = "Sign-in failed: " + e.message;
+    $("testOut").textContent = "error: " + e.message;
   }
-}
+};
 
-function renderGoogleBtn(){
-  if (!window.google || !CFG.clientId) return;
-  google.accounts.id.initialize({ client_id: CFG.clientId, callback: onCredential });
-  google.accounts.id.renderButton($("gsiBox"), { theme: "filled_black", size: "large", text: "signin_with" });
-}
-
-async function refresh(){
-  const data = await api("/admin/keys");
-  const tbody = $("rows"); tbody.innerHTML = "";
-  let total = 0;
-  (data.keys||[]).forEach(k => {
-    total += Number(k.balance||0);
-    const tr = document.createElement("tr");
-    tr.innerHTML =
-      "<td>"+escapeHtml(k.label||"")+"</td>"+
-      "<td><code>"+escapeHtml(k.account_id||"")+"</code></td>"+
-      "<td>$"+Number(k.balance||0).toFixed(2)+"</td>"+
-      "<td class=\"muted\">"+(k.last_used?new Date(k.last_used).toLocaleString():"never")+"</td>"+
-      "<td>"+(k.status==="ok"
-        ? "<span class=\"pill\" style=\"background:#1b3a2a;color:#9ef5b5\">ok</span>"
-        : "<span class=\"pill\" style=\"background:#3a1b1b;color:#ff9aa2\">"+escapeHtml(k.status||"")+"</span>")+"</td>"+
-      "<td><button class=\"secondary\" data-edit=\""+k.id+"\">Edit</button> <button class=\"danger\" data-del=\""+k.id+"\">Delete</button></td>";
-    tbody.appendChild(tr);
-  });
-  $("countStat").textContent = (data.keys||[]).length;
-  $("totalStat").textContent = "$"+total.toFixed(2);
-  $("emptyState").classList.toggle("hidden", (data.keys||[]).length>0);
-}
-
-async function addKey(){
-  const label = $("label").value.trim();
-  const connection = $("connectionStr").value.trim();
-  const balance = parseFloat($("balance").value || "3");
-  if (!connection) { alert("Connection URL required"); return; }
-  await api("/admin/keys", { method:"POST", body: JSON.stringify({ label, connection, balance }) });
-  $("label").value=""; $("connectionStr").value=""; $("balance").value="3";
-  refresh();
-}
-
-document.addEventListener("click", async (e) => {
-  const del = e.target.getAttribute("data-del");
-  const edit = e.target.getAttribute("data-edit");
-  if (del && confirm("Delete this key?")) { await api("/admin/keys/"+del, { method:"DELETE" }); refresh(); }
-  if (edit) {
-    const nb = prompt("New balance in $:"); if (nb === null) return;
-    const nl = prompt("New label (blank to keep):");
-    await api("/admin/keys/"+edit, { method:"PATCH", body: JSON.stringify({ balance: parseFloat(nb), label: nl || undefined }) });
-    refresh();
+(async function init(){
+  const { url, pw } = cfg();
+  if (url && pw) {
+    $("workerUrl").value = url;
+    const r = await api("/admin/keys");
+    if (r.ok) { show("app"); loadKeys(); return; }
   }
-});
-
-$("addBtn").onclick = addKey;
-$("refreshBtn").onclick = refresh;
-$("probeBtn").onclick = async () => { await api("/admin/probe", { method:"POST" }); refresh(); };
-$("logoutBtn").onclick = () => { localStorage.removeItem("atxp-mgr"); location.reload(); };
-
-["workerUrl","googleClientId"].forEach(id =>
-  $(id).addEventListener("change", () => { CFG.url = $("workerUrl").value.trim(); CFG.clientId = $("googleClientId").value.trim(); save(); renderGoogleBtn(); }));
-
-load();
-$("workerUrl").value = CFG.url;
-$("googleClientId").value = CFG.clientId;
-
-const gsiReady = setInterval(() => { if (window.google) { clearInterval(gsiReady); renderGoogleBtn(); } }, 200);
+  if (url) $("workerUrl").value = url;
+  show("login");
+})();
 </script>
 </body>
 </html>

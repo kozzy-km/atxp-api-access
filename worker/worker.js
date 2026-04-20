@@ -1,252 +1,141 @@
-// Cloudflare Worker: ATXP Manager
-// Storage:  D1 database (binding: DB)
-// Auth:     Google Identity Services (ID token in Authorization: Bearer <jwt>)
-// Secrets:  GOOGLE_CLIENT_ID   - OAuth client id from Google Cloud
-//           ALLOWED_EMAIL      - your google email (only this email gets in)
-//
-// Routes:
-//   GET    /admin/keys          list accounts (connection token is NOT returned)
-//   POST   /admin/keys          add  {label, connection, balance}
-//   PATCH  /admin/keys/:id      update {label?, balance?, connection?, status?}
-//   DELETE /admin/keys/:id      remove
-//   POST   /admin/probe         ping every key, delete the dead ones
-//   ANY    /v1/*                OpenAI-compatible passthrough to llm.atxp.ai
-//                               with automatic rotation + delete on 402/401
+// ATXP API Key Manager - Cloudflare Worker
+// Auth: simple password (DASHBOARD_PASSWORD secret)
+// Storage: D1 database (binding: DB)
+// Proxy: forwards /v1/* to ATXP with auto-rotation on 401/402
 
-const ATXP_BASE = "https://llm.atxp.ai";
-const DEFAULT_BALANCE = 3;
-const GOOGLE_JWKS_URL = "https://www.googleapis.com/oauth2/v3/certs";
+const ATXP_BASE = "https://api.atxp.ai";
+
 const CORS = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization,content-type",
-  "Access-Control-Allow-Methods": "GET,POST,PATCH,DELETE,OPTIONS",
+  "Access-Control-Allow-Methods": "GET,POST,PUT,DELETE,OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type,Authorization",
 };
 
-export default {
-  async fetch(request, env) {
-    const url = new URL(request.url);
-    if (request.method === "OPTIONS") return new Response(null, { headers: CORS });
-
-    try {
-      if (url.pathname === "/" || url.pathname === "")
-        return json({ name: "ATXP Manager Worker", ok: true });
-
-      const authed = await requireGoogle(request, env);
-      if (!authed.ok) return json({ error: authed.error }, 401);
-
-      if (url.pathname.startsWith("/admin")) return await handleAdmin(request, url, env);
-      if (url.pathname.startsWith("/v1/"))  return await handleProxy(request, url, env);
-      return json({ error: "not found" }, 404);
-    } catch (err) {
-      return json({ error: String(err && err.message || err) }, 500);
-    }
-  },
-};
-
-function json(obj, status = 200) {
-  return new Response(JSON.stringify(obj), {
+function json(data, status = 200) {
+  return new Response(JSON.stringify(data), {
     status,
-    headers: { "content-type": "application/json", ...CORS },
+    headers: { "Content-Type": "application/json", ...CORS },
   });
 }
 
-// ---------- Google ID-token verification ----------
-let JWKS_CACHE = { keys: null, at: 0 };
-async function getJwks() {
-  const now = Date.now();
-  if (JWKS_CACHE.keys && now - JWKS_CACHE.at < 3600000) return JWKS_CACHE.keys;
-  const r = await fetch(GOOGLE_JWKS_URL);
-  const j = await r.json();
-  JWKS_CACHE = { keys: j.keys, at: now };
-  return j.keys;
-}
-function b64urlToBytes(s) {
-  s = s.replace(/-/g, "+").replace(/_/g, "/"); while (s.length % 4) s += "=";
-  const bin = atob(s); const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
-}
-function b64urlToJson(s) { return JSON.parse(new TextDecoder().decode(b64urlToBytes(s))); }
-
-async function verifyGoogleIdToken(jwt, clientId) {
-  const [h, p, sig] = jwt.split(".");
-  if (!h || !p || !sig) throw new Error("malformed jwt");
-  const header  = b64urlToJson(h);
-  const payload = b64urlToJson(p);
-  const jwk = (await getJwks()).find(k => k.kid === header.kid);
-  if (!jwk) throw new Error("unknown signing key");
-  const key = await crypto.subtle.importKey(
-    "jwk", jwk, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["verify"],
-  );
-  const ok = await crypto.subtle.verify(
-    "RSASSA-PKCS1-v1_5", key, b64urlToBytes(sig),
-    new TextEncoder().encode(h + "." + p),
-  );
-  if (!ok) throw new Error("bad signature");
-  const now = Math.floor(Date.now() / 1000);
-  if (payload.exp <= now) throw new Error("expired");
-  if (payload.aud !== clientId) throw new Error("bad aud");
-  if (!["accounts.google.com","https://accounts.google.com"].includes(payload.iss))
-    throw new Error("bad iss");
-  return payload;
+function checkAuth(request, env) {
+  const h = request.headers.get("Authorization") || "";
+  const token = h.replace(/^Bearer\s+/i, "").trim();
+  if (!token || !env.DASHBOARD_PASSWORD) return false;
+  return token === env.DASHBOARD_PASSWORD;
 }
 
-async function requireGoogle(request, env) {
-  const bearer = (request.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
-  if (!bearer) return { ok: false, error: "missing bearer" };
-  if (!env.GOOGLE_CLIENT_ID || !env.ALLOWED_EMAIL)
-    return { ok: false, error: "server not configured (GOOGLE_CLIENT_ID / ALLOWED_EMAIL)" };
-  try {
-    const p = await verifyGoogleIdToken(bearer, env.GOOGLE_CLIENT_ID);
-    if (!p.email_verified) return { ok: false, error: "email not verified" };
-    if (p.email.toLowerCase() !== env.ALLOWED_EMAIL.toLowerCase())
-      return { ok: false, error: "forbidden" };
-    return { ok: true, email: p.email };
-  } catch (e) {
-    return { ok: false, error: "invalid token: " + e.message };
-  }
+async function pickKey(env) {
+  const row = await env.DB.prepare(
+    "SELECT id, api_key FROM keys WHERE active = 1 ORDER BY COALESCE(last_used, 0) ASC LIMIT 1"
+  ).first();
+  return row || null;
 }
 
-// ---------- D1 helpers ----------
+async function markUsed(env, id) {
+  await env.DB.prepare("UPDATE keys SET last_used = ?1 WHERE id = ?2")
+    .bind(Date.now(), id).run();
+}
+
+async function markDead(env, id) {
+  await env.DB.prepare("UPDATE keys SET active = 0 WHERE id = ?1").bind(id).run();
+}
+
 async function listKeys(env) {
   const { results } = await env.DB.prepare(
-    "SELECT id,label,connection,account_id,balance,status,last_used,created_at FROM keys ORDER BY created_at ASC"
+    "SELECT id, label, active, last_used, created_at, substr(api_key,1,6)||'...'||substr(api_key,-4) AS preview FROM keys ORDER BY id DESC"
   ).all();
   return results || [];
 }
-async function getKey(env, id) {
-  return await env.DB.prepare("SELECT * FROM keys WHERE id=?").bind(id).first();
-}
-async function delKey(env, id) {
-  await env.DB.prepare("DELETE FROM keys WHERE id=?").bind(id).run();
-}
-async function insertKey(env, k) {
+
+async function addKey(env, label, apiKey) {
   await env.DB.prepare(
-    "INSERT INTO keys(id,label,connection,account_id,balance,status,last_used,created_at) VALUES(?,?,?,?,?,?,?,?)"
-  ).bind(k.id, k.label, k.connection, k.account_id, k.balance, k.status, k.last_used, k.created_at).run();
-}
-async function updateKey(env, k) {
-  await env.DB.prepare(
-    "UPDATE keys SET label=?,connection=?,account_id=?,balance=?,status=?,last_used=? WHERE id=?"
-  ).bind(k.label, k.connection, k.account_id, k.balance, k.status, k.last_used, k.id).run();
+    "INSERT INTO keys (label, api_key, active, created_at) VALUES (?1, ?2, 1, ?3)"
+  ).bind(label || "key", apiKey, Date.now()).run();
 }
 
-function publicView(k) {
-  return {
-    id: k.id, label: k.label, account_id: k.account_id,
-    balance: k.balance, status: k.status, last_used: k.last_used,
-    created_at: k.created_at,
-  };
-}
-function parseConn(c) {
-  try {
-    const u = new URL(c);
-    return { account_id: u.searchParams.get("account_id") || "" };
-  } catch { return { account_id: "" }; }
+async function deleteKey(env, id) {
+  await env.DB.prepare("DELETE FROM keys WHERE id = ?1").bind(id).run();
 }
 
-// ---------- admin ----------
-async function handleAdmin(request, url, env) {
-  const parts = url.pathname.split("/").filter(Boolean);
-  const id = parts[2];
-
-  if (parts[1] === "keys" && !id) {
-    if (request.method === "GET") {
-      const rows = await listKeys(env);
-      return json({ keys: rows.map(publicView) });
-    }
-    if (request.method === "POST") {
-      const body = await request.json();
-      if (!body.connection) return json({ error: "connection required" }, 400);
-      const rec = {
-        id: crypto.randomUUID(),
-        label: body.label || "",
-        connection: body.connection,
-        account_id: parseConn(body.connection).account_id,
-        balance: typeof body.balance === "number" ? body.balance : DEFAULT_BALANCE,
-        status: "ok",
-        last_used: null,
-        created_at: Date.now(),
-      };
-      await insertKey(env, rec);
-      return json({ key: publicView(rec) }, 201);
-    }
-  }
-
-  if (parts[1] === "keys" && id) {
-    const existing = await getKey(env, id);
-    if (!existing) return json({ error: "not found" }, 404);
-    if (request.method === "DELETE") { await delKey(env, id); return json({ ok: true }); }
-    if (request.method === "PATCH") {
-      const body = await request.json();
-      if (typeof body.label === "string") existing.label = body.label;
-      if (typeof body.balance === "number" && !Number.isNaN(body.balance)) existing.balance = body.balance;
-      if (typeof body.connection === "string" && body.connection) {
-        existing.connection = body.connection;
-        existing.account_id = parseConn(body.connection).account_id;
-      }
-      if (typeof body.status === "string") existing.status = body.status;
-      await updateKey(env, existing);
-      return json({ key: publicView(existing) });
-    }
-  }
-
-  if (parts[1] === "probe" && request.method === "POST") {
-    const rows = await listKeys(env);
-    let removed = 0;
-    for (const k of rows) {
-      if (!(await probeKey(k.connection))) { await delKey(env, k.id); removed++; }
-    }
-    return json({ ok: true, removed });
-  }
-
-  return json({ error: "not found" }, 404);
+async function toggleKey(env, id, active) {
+  await env.DB.prepare("UPDATE keys SET active = ?1 WHERE id = ?2")
+    .bind(active ? 1 : 0, id).run();
 }
 
-async function probeKey(connection) {
-  try {
-    const r = await fetch(ATXP_BASE + "/v1/models", {
-      headers: { "Authorization": "Bearer " + connection },
-    });
-    return r.status !== 402 && r.status !== 401;
-  } catch { return true; }
-}
+async function proxyATXP(request, env, path) {
+  const maxTries = 5;
+  let lastStatus = 500, lastBody = "no active keys";
 
-// ---------- proxy with auto-rotation ----------
-async function handleProxy(request, url, env) {
-  const bodyBuf = ["GET","HEAD"].includes(request.method) ? undefined : await request.arrayBuffer();
-  const path = url.pathname + url.search;
+  for (let i = 0; i < maxTries; i++) {
+    const key = await pickKey(env);
+    if (!key) return new Response("No active ATXP keys in pool", { status: 503, headers: CORS });
 
-  const all = await listKeys(env);
-  const pool = all.filter(k => k.status !== "dead")
-                  .sort((a,b) => (a.last_used || 0) - (b.last_used || 0));
-  if (!pool.length) return json({ error: "no ATXP keys configured" }, 503);
+    const url = ATXP_BASE + path + (new URL(request.url).search || "");
+    const headers = new Headers(request.headers);
+    headers.set("Authorization", "Bearer " + key.api_key);
+    headers.delete("host");
 
-  let lastErr = null;
-  for (const k of pool) {
-    const upstream = await fetch(ATXP_BASE + path, {
+    const init = {
       method: request.method,
-      headers: {
-        "Authorization": "Bearer " + k.connection,
-        "Content-Type": request.headers.get("content-type") || "application/json",
-      },
-      body: bodyBuf,
-    });
+      headers,
+      body: ["GET","HEAD"].includes(request.method) ? undefined : await request.clone().arrayBuffer(),
+    };
 
-    if (upstream.status === 402 || upstream.status === 401) {
-      await delKey(env, k.id);
-      lastErr = { status: upstream.status, id: k.id };
+    const resp = await fetch(url, init);
+
+    if (resp.status === 401 || resp.status === 402) {
+      await markDead(env, key.id);
+      lastStatus = resp.status;
+      lastBody = await resp.text();
       continue;
     }
-
-    k.last_used = Date.now();
-    k.balance = Math.max(0, Number(k.balance || 0) - 0.01);
-    await updateKey(env, k);
-
-    return new Response(upstream.body, {
-      status: upstream.status,
-      headers: { ...Object.fromEntries(upstream.headers), ...CORS },
-    });
+    await markUsed(env, key.id);
+    const out = new Response(resp.body, { status: resp.status, headers: resp.headers });
+    for (const [k,v] of Object.entries(CORS)) out.headers.set(k, v);
+    return out;
   }
-  return json({ error: "all keys exhausted", last: lastErr }, 402);
+  return new Response("All keys exhausted. Last: " + lastBody, { status: lastStatus, headers: CORS });
 }
+
+export default {
+  async fetch(request, env) {
+    if (request.method === "OPTIONS") return new Response(null, { headers: CORS });
+
+    const url = new URL(request.url);
+    const path = url.pathname;
+
+    if (path === "/health") return json({ ok: true });
+
+    if (!checkAuth(request, env)) {
+      return json({ error: "unauthorized" }, 401);
+    }
+
+    if (path === "/admin/keys" && request.method === "GET") {
+      return json(await listKeys(env));
+    }
+    if (path === "/admin/keys" && request.method === "POST") {
+      const body = await request.json();
+      if (!body.api_key) return json({ error: "api_key required" }, 400);
+      await addKey(env, body.label, body.api_key);
+      return json({ ok: true });
+    }
+    if (path.startsWith("/admin/keys/") && request.method === "DELETE") {
+      const id = Number(path.split("/").pop());
+      await deleteKey(env, id);
+      return json({ ok: true });
+    }
+    if (path.startsWith("/admin/keys/") && path.endsWith("/toggle") && request.method === "POST") {
+      const id = Number(path.split("/")[3]);
+      const body = await request.json();
+      await toggleKey(env, id, !!body.active);
+      return json({ ok: true });
+    }
+
+    if (path.startsWith("/v1/")) {
+      return proxyATXP(request, env, path);
+    }
+
+    return json({ error: "not found" }, 404);
+  },
+};

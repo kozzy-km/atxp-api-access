@@ -1,12 +1,9 @@
--- Run:  npx wrangler d1 execute atxp_manager --file=worker/schema.sql --remote
 CREATE TABLE IF NOT EXISTS keys (
-  id          TEXT PRIMARY KEY,
-  label       TEXT,
-  connection  TEXT NOT NULL,
-  account_id  TEXT,
-  balance     REAL NOT NULL DEFAULT 3,
-  status      TEXT NOT NULL DEFAULT 'ok',
-  last_used   INTEGER,
-  created_at  INTEGER NOT NULL
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  label TEXT,
+  api_key TEXT NOT NULL,
+  active INTEGER NOT NULL DEFAULT 1,
+  last_used INTEGER,
+  created_at INTEGER NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_keys_last_used ON keys(last_used);
+CREATE INDEX IF NOT EXISTS idx_keys_active_lastused ON keys(active, last_used);
