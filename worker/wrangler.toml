@@ -4,5 +4,5 @@ compatibility_date = "2025-01-01"
 
 [[d1_databases]]
 binding = "DB"
-database_name = "atxp-db"
-database_id = "PASTE_YOUR_D1_ID_HERE"
+database_name = "atxp"
+database_id = "REPLACE_WITH_YOUR_D1_ID"

@@ -1,22 +1,54 @@
-# ATXP API Key Manager
+# ATXP Key Manager — v5
 
-Private mobile-friendly dashboard + Cloudflare Worker that stores a pool of ATXP API keys in D1 and auto-rotates them.
+Self-hosted Cloudflare Worker that proxies OpenAI-compatible requests to ATXP with:
+- Multi-key pool + automatic rotation on 401/402
+- Per-key credit tracking ($) and token counters
+- Full request logs
+- Playground with all sampling params + code export (Python / cURL)
+- Single password auth (DASHBOARD_PASSWORD)
 
-**Dashboard:** https://kozzy-km.github.io/atxp-api-access/
-**Auth:** single password (you set it as a Worker secret).
+## Endpoints
+- `GET  /`                     — web console (HTML)
+- `GET  /health`               — public health check
+- `POST /v1/chat/completions`  — OpenAI-compatible proxy (auth: Bearer DASHBOARD_PASSWORD)
+- `GET  /admin/stats`
+- `GET  /admin/logs?limit=N`
+- `GET|POST /admin/keys`
+- `POST /admin/keys/:id/toggle` `{active: bool}`
+- `POST /admin/keys/:id/reset`
+- `DELETE /admin/keys/:id`
 
-## Files
-- `index.html` — dashboard (GitHub Pages)
-- `worker/worker.js` — Cloudflare Worker (D1 + proxy + password auth)
-- `worker/wrangler.toml` — Worker config
-- `worker/schema.sql` — D1 table
+## Upgrade from v4
+Run these in your D1 console (Cloudflare dashboard → D1 → your DB → Console) once:
+```sql
+ALTER TABLE keys ADD COLUMN credit_cents INTEGER DEFAULT 300;
+ALTER TABLE keys ADD COLUMN used_cents INTEGER DEFAULT 0;
+ALTER TABLE keys ADD COLUMN prompt_tokens INTEGER DEFAULT 0;
+ALTER TABLE keys ADD COLUMN completion_tokens INTEGER DEFAULT 0;
+```
+Then create the logs table:
+```sql
+CREATE TABLE IF NOT EXISTS logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts INTEGER, key_id INTEGER, model TEXT, status INTEGER,
+  prompt_tokens INTEGER DEFAULT 0, completion_tokens INTEGER DEFAULT 0,
+  cost_cents INTEGER DEFAULT 0, duration_ms INTEGER, stream INTEGER DEFAULT 0,
+  request_json TEXT, response_preview TEXT, error TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_logs_ts ON logs(ts DESC);
+```
 
-## How rotation works
+## Deploy
+```
+cd worker
+wrangler deploy
+```
 
-**UI (visual):** a list of keys with active/dead pills, last-used timestamps.
+## Using from code
+```python
+from openai import OpenAI
+client = OpenAI(api_key="YOUR_DASHBOARD_PASSWORD", base_url="https://your-worker.workers.dev/v1")
+```
 
-**CF backend (what happens on every /v1/* call):**
-1. Worker picks the active key with oldest last_used.
-2. Forwards to api.atxp.ai with that key.
-3. On 401/402 → marks key dead in D1, retries with next (up to 5).
-4. On success → updates last_used.
+## Pricing
+Edit the `PRICE` table at the top of `worker.js` to match ATXP's real rates. Defaults are Claude-family estimates.
