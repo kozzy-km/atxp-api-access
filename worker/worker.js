@@ -3,7 +3,7 @@
 // Storage: D1 database (binding: DB)
 // Proxy: forwards /v1/* to ATXP with auto-rotation on 401/402
 
-const ATXP_BASE = "https://api.atxp.ai";
+const ATXP_BASE = "https://llm.atxp.ai";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
